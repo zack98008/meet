@@ -104,7 +104,9 @@ stopRecordingBtn.addEventListener("click", stopRecording);
 // Open dashboard link
 document.querySelector(".footer a").addEventListener("click", (e) => {
   e.preventDefault();
-  chrome.tabs.create({ url: "https://tempolabs.ai" });
+  chrome.tabs.create({
+    url: "https://nice-hofstadter8-blhvp.dev.tempolabs.ai",
+  });
 });
 
 // Initialize
