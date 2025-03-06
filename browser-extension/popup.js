@@ -116,13 +116,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((message) => {
+  // Handle recording status changes
   if (message.type === "RECORDING_STATUS_CHANGED") {
     isRecording = message.isRecording;
     updateUI();
   }
-
-  if (message.type === "MEETING_UPDATED") {
+  // Handle meeting updates
+  else if (message.type === "MEETING_UPDATED") {
     activeMeeting = message.meeting;
     updateUI();
+  }
+  // Handle new messages from content script
+  else if (message.action === "recordingStarted") {
+    isRecording = true;
+    updateUI();
+  } else if (message.action === "recordingStopped") {
+    isRecording = false;
+    updateUI();
+  } else if (message.action === "participantsUpdated") {
+    if (activeMeeting && activeMeeting.meetingId === message.meetingId) {
+      activeMeeting.participants = message.participants;
+      updateUI();
+    }
+  } else if (message.action === "meetingDetected") {
+    // Request full meeting info after detection
+    getMeetingInfo();
   }
 });

@@ -103,7 +103,52 @@
       .meeting-info .label {
         color: #a1a1aa;
         display: inline-block;
-        width: 70px;
+        width: 80px;
+      }
+
+      .participants-list {
+        max-height: 100px;
+        overflow-y: auto;
+        margin-top: 8px;
+        background-color: #2d2d30;
+        border-radius: 4px;
+        padding: 8px;
+      }
+
+      .participant-item {
+        font-size: 12px;
+        padding: 4px 0;
+        border-bottom: 1px solid #3d3d3d;
+      }
+
+      .participant-item:last-child {
+        border-bottom: none;
+      }
+
+      .tabs {
+        display: flex;
+        margin-bottom: 12px;
+        border-bottom: 1px solid #27272a;
+      }
+
+      .tab {
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        border-bottom: 2px solid transparent;
+      }
+
+      .tab.active {
+        border-bottom: 2px solid #2563eb;
+        color: #2563eb;
+      }
+
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: block;
       }
 
       .controls {
@@ -144,6 +189,74 @@
         background-color: #dc2626;
       }
 
+      button.secondary {
+        background-color: #4b5563;
+      }
+
+      button.secondary:hover {
+        background-color: #374151;
+      }
+
+      .settings-row {
+        display: flex;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .settings-label {
+        flex: 1;
+        font-size: 13px;
+      }
+
+      .toggle {
+        position: relative;
+        display: inline-block;
+        width: 40px;
+        height: 20px;
+      }
+
+      .toggle input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: #4b5563;
+        transition: 0.4s;
+        border-radius: 20px;
+      }
+
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 16px;
+        width: 16px;
+        left: 2px;
+        bottom: 2px;
+        background-color: white;
+        transition: 0.4s;
+        border-radius: 50%;
+      }
+
+      input:checked + .slider {
+        background-color: #2563eb;
+      }
+
+      input:focus + .slider {
+        box-shadow: 0 0 1px #2563eb;
+      }
+
+      input:checked + .slider:before {
+        transform: translateX(20px);
+      }
+
       .footer {
         padding: 12px 16px;
         border-top: 1px solid #27272a;
@@ -170,6 +283,44 @@
         margin: 8px 0;
         color: #a1a1aa;
       }
+
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 11px;
+        margin-left: 4px;
+      }
+
+      .badge.recording {
+        background-color: #ef4444;
+        color: white;
+      }
+
+      .connection-status {
+        font-size: 11px;
+        padding: 2px 6px;
+        border-radius: 4px;
+        background-color: #27272a;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 4px;
+      }
+
+      .connection-indicator {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+      }
+
+      .connection-indicator.connected {
+        background-color: #22c55e;
+      }
+
+      .connection-indicator.disconnected {
+        background-color: #ef4444;
+      }
     </style>
   </head>
   <body>
@@ -183,59 +334,133 @@
         <div class="status-title">
           <span id="statusIndicator" class="status-indicator inactive"></span>
           <span id="statusText">No active meeting</span>
+          <span
+            id="recordingBadge"
+            class="badge recording"
+            style="display: none"
+            >RECORDING</span
+          >
         </div>
         <p id="statusDetails" class="status-details">
           Open a Google Meet session to get started
         </p>
       </div>
 
-      <div id="meetingInfo" class="meeting-info" style="display: none">
-        <p>
-          <span class="label">Title:</span> <span id="meetingTitle">-</span>
-        </p>
-        <p>
-          <span class="label">Meeting ID:</span> <span id="meetingId">-</span>
-        </p>
-        <p>
-          <span class="label">Started:</span>
-          <span id="meetingStartTime">-</span>
-        </p>
-        <p>
-          <span class="label">Participants:</span>
-          <span id="participantCount">-</span>
-        </p>
+      <div class="tabs">
+        <div class="tab active" data-tab="meeting-tab">Meeting</div>
+        <div class="tab" data-tab="participants-tab">Participants</div>
+        <div class="tab" data-tab="settings-tab">Settings</div>
       </div>
 
-      <div id="noMeetingMessage" class="no-meeting">
-        <p>No active Google Meet session detected</p>
-        <p>Open a Google Meet to start recording and tracking</p>
+      <div id="meetingTab" class="tab-content active">
+        <div id="meetingInfo" class="meeting-info" style="display: none">
+          <p>
+            <span class="label">Title:</span> <span id="meetingTitle">-</span>
+          </p>
+          <p>
+            <span class="label">Meeting ID:</span> <span id="meetingId">-</span>
+          </p>
+          <p>
+            <span class="label">Started:</span>
+            <span id="meetingStartTime">-</span>
+          </p>
+          <p>
+            <span class="label">Duration:</span>
+            <span id="meetingDuration">-</span>
+          </p>
+          <p>
+            <span class="label">Participants:</span>
+            <span id="participantCount">-</span>
+          </p>
+          <p>
+            <span class="label">Host:</span>
+            <span id="meetingHost">-</span>
+          </p>
+          <p>
+            <span class="label">Web App:</span>
+            <span id="webAppConnection" class="connection-status">
+              <span
+                id="connectionIndicator"
+                class="connection-indicator disconnected"
+              ></span>
+              <span id="connectionText">Disconnected</span>
+            </span>
+          </p>
+        </div>
+
+        <div id="noMeetingMessage" class="no-meeting">
+          <p>No active Google Meet session detected</p>
+          <p>Open a Google Meet to start recording and tracking</p>
+        </div>
+
+        <div id="controls" class="controls" style="display: none">
+          <button id="startRecordingBtn" class="start">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <circle cx="12" cy="12" r="10" fill="currentColor" />
+            </svg>
+            Start Recording
+          </button>
+          <button id="stopRecordingBtn" class="stop" style="display: none">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <rect x="6" y="6" width="12" height="12" fill="currentColor" />
+            </svg>
+            Stop Recording
+          </button>
+        </div>
       </div>
 
-      <div id="controls" class="controls" style="display: none">
-        <button id="startRecordingBtn" class="start">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <circle cx="12" cy="12" r="10" fill="currentColor" />
-          </svg>
-          Start Recording
-        </button>
-        <button id="stopRecordingBtn" class="stop" style="display: none">
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <rect x="6" y="6" width="12" height="12" fill="currentColor" />
-          </svg>
-          Stop Recording
-        </button>
+      <div id="participantsTab" class="tab-content">
+        <div
+          id="participantsList"
+          class="participants-list"
+          style="display: none"
+        >
+          <!-- Participants will be populated here -->
+        </div>
+        <div id="noParticipantsMessage" class="no-meeting">
+          <p>No participants data available</p>
+        </div>
+      </div>
+
+      <div id="settingsTab" class="tab-content">
+        <div class="settings-row">
+          <span class="settings-label">Auto-connect to web app</span>
+          <label class="toggle">
+            <input type="checkbox" id="autoConnectToggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Notify on participant join/leave</span>
+          <label class="toggle">
+            <input type="checkbox" id="notifyParticipantsToggle" />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Show recording confirmation</span>
+          <label class="toggle">
+            <input type="checkbox" id="recordingConfirmToggle" checked />
+            <span class="slider"></span>
+          </label>
+        </div>
+        <div class="controls">
+          <button id="connectToAppBtn" class="secondary">
+            Connect to Web App
+          </button>
+        </div>
       </div>
     </div>
 
@@ -243,7 +468,7 @@
       <a href="https://nice-hofstadter8-blhvp.dev.tempolabs.ai" target="_blank"
         >Open Web Dashboard</a
       >
-      | v1.0.0
+      | <a href="#" id="aboutLink">About</a> | v1.0.1
     </div>
 
     <script src="popup.js"></script>

@@ -1,5 +1,4 @@
 // Content script for Google Meet Enhancement Tool
-
 // State variables
 let meetingDetected = false;
 let meetingId = null;
@@ -8,30 +7,26 @@ let isRecording = false;
 let mediaRecorder = null;
 let recordedChunks = [];
 let participantsObserver = null;
-
+let currentParticipants = [];
 // Function to extract meeting ID from URL
 function extractMeetingInfo() {
   const url = window.location.href;
   const urlObj = new URL(url);
-
   // Format: https://meet.google.com/abc-defg-hij
   if (!urlObj.hostname.includes("meet.google.com")) {
     return null;
   }
-
   // Extract the meeting code from the path
   const meetingCode = urlObj.pathname.replace("/", "");
   if (!meetingCode || !/^[a-z]+-[a-z]+-[a-z]+$/.test(meetingCode)) {
     return null;
   }
-
   return {
     meetingId: meetingCode,
     meetingCode: meetingCode,
     url: url,
   };
 }
-
 // Function to get meeting title
 function getMeetingTitle() {
   // Try to find the meeting title in the DOM
@@ -39,7 +34,6 @@ function getMeetingTitle() {
   if (titleElement) {
     return titleElement.getAttribute("data-meeting-title");
   }
-
   // Fallback: try to find it in other common elements
   const h1Elements = document.querySelectorAll("h1, h2, h3");
   for (const element of h1Elements) {
@@ -47,18 +41,15 @@ function getMeetingTitle() {
       return element.textContent.trim();
     }
   }
-
   // If we can't find a title, use the meeting code
   const meetingInfo = extractMeetingInfo();
   return meetingInfo
     ? `Google Meet: ${meetingInfo.meetingCode}`
     : "Google Meet";
 }
-
 // Function to get participants
 function getParticipants() {
   const participants = [];
-
   // Try to find the participants panel
   // Google Meet's DOM structure changes frequently, so we need to try multiple selectors
   const participantContainers = [
@@ -70,7 +61,6 @@ function getParticipants() {
     // Another common pattern in Google Meet
     document.querySelectorAll('[jsname="r4nke"]'),
   ];
-
   // Use the first non-empty container
   let participantElements = [];
   for (const container of participantContainers) {
@@ -79,7 +69,6 @@ function getParticipants() {
       break;
     }
   }
-
   // If we still don't have participants, try to find them in the video grid
   if (participantElements.length === 0) {
     const videoElements = document.querySelectorAll("video");
@@ -89,14 +78,12 @@ function getParticipants() {
       const nameElement =
         video.closest("[data-participant-name]") ||
         video.closest('[jsname="r4nke"]');
-
       if (nameElement) {
         name =
           nameElement.getAttribute("data-participant-name") ||
           nameElement.textContent ||
           `Participant ${index + 1}`;
       }
-
       participants.push({
         id: `video-participant-${index}`,
         name: name.trim(),
@@ -104,384 +91,513 @@ function getParticipants() {
         isMuted: video.muted,
         hasCamera: true,
         isCameraOn: !video.paused,
-        joinTime: new Date().toISOString(),
+        isScreenSharing: false, // Can't reliably determine from video
       });
     });
   } else {
-    // Process the participant elements we found
+    // Process participant elements from the participants panel
     participantElements.forEach((element, index) => {
-      // Try different ways to get the participant ID
-      const id =
-        element.getAttribute("data-participant-id") ||
-        element.getAttribute("id") ||
-        `participant-${index}`;
-
-      // Try different ways to get the name
-      let name = "Unknown";
-      const nameElement =
-        element.querySelector("[data-participant-name]") ||
-        element.querySelector(".participant-name") ||
-        element;
-
-      if (nameElement) {
-        name =
-          nameElement.getAttribute("data-participant-name") ||
-          nameElement.textContent ||
-          `Participant ${index + 1}`;
+      let name = element.textContent || `Participant ${index + 1}`;
+      // Try to extract name from various attributes
+      if (element.getAttribute("data-participant-name")) {
+        name = element.getAttribute("data-participant-name");
       }
 
-      // Check for host status
+      // Check if host (look for host indicator)
       const isHost =
-        element.classList.contains("is-host") ||
-        element.querySelector(".host-badge") !== null ||
-        name.includes("(You)") ||
-        name.includes("(Host)");
+        element.querySelector('[aria-label*="host"]') !== null ||
+        element.textContent.includes("(host)") ||
+        element.textContent.includes("(Host)");
 
-      // Check for mute status
+      // Check if muted (look for mute indicator)
       const isMuted =
-        element.classList.contains("is-muted") ||
-        element.querySelector(".muted-icon") !== null ||
-        element.querySelector('[aria-label*="muted"]') !== null;
+        element.querySelector('[aria-label*="muted"]') !== null ||
+        element.querySelector('[title*="muted"]') !== null;
 
-      // Check for camera status
-      const cameraElement = element.querySelector('[aria-label*="camera"]');
+      // Check if camera is on (look for camera indicator)
+      const cameraElement =
+        element.querySelector('[aria-label*="camera"]') ||
+        element.querySelector('[title*="camera"]');
       const hasCamera = cameraElement !== null;
       const isCameraOn =
-        hasCamera && !cameraElement.getAttribute("aria-label").includes("off");
+        hasCamera &&
+        !(
+          cameraElement.getAttribute("aria-label")?.includes("off") ||
+          cameraElement.getAttribute("title")?.includes("off")
+        );
+
+      // Check if screen sharing
+      const isScreenSharing =
+        element.querySelector('[aria-label*="presenting"]') !== null ||
+        element.querySelector('[title*="presenting"]') !== null ||
+        element.textContent.includes("(presenting)");
 
       participants.push({
-        id,
+        id:
+          element.getAttribute("data-participant-id") || `participant-${index}`,
         name: name.trim(),
         isHost,
         isMuted,
         hasCamera,
         isCameraOn,
-        joinTime: new Date().toISOString(),
+        isScreenSharing,
       });
-    });
-  }
-
-  // If we still have no participants but we're in a meeting, add at least the current user
-  if (participants.length === 0 && meetingDetected) {
-    participants.push({
-      id: "current-user",
-      name: "You",
-      isHost: true,
-      isMuted: false,
-      hasCamera: true,
-      isCameraOn: true,
-      joinTime: new Date().toISOString(),
     });
   }
 
   return participants;
 }
 
-// Function to detect if we're in a Google Meet
-function detectMeeting() {
-  const meetingInfo = extractMeetingInfo();
-
-  if (meetingInfo && !meetingDetected) {
-    console.log("Google Meet detected:", meetingInfo);
-    meetingId = meetingInfo.meetingId;
-    meetingTitle = getMeetingTitle();
-
-    // Notify background script
-    chrome.runtime.sendMessage(
-      {
-        type: "MEETING_DETECTED",
-        meetingId: meetingInfo.meetingId,
-        meetingCode: meetingInfo.meetingCode,
-        title: meetingTitle,
-        url: meetingInfo.url,
-        participants: getParticipants(),
-      },
-      (response) => {
-        console.log("Meeting detection response:", response);
-      },
-    );
-
-    meetingDetected = true;
-    setupParticipantObserver();
-  } else if (!meetingInfo && meetingDetected) {
-    console.log("Google Meet ended");
-
-    // Notify background script
-    chrome.runtime.sendMessage({
-      type: "MEETING_ENDED",
-      meetingId,
-    });
-
-    // Stop recording if active
-    if (isRecording) {
-      stopRecording();
-    }
-
-    // Reset state
-    meetingDetected = false;
-    meetingId = null;
-    meetingTitle = null;
-
-    // Clean up observers
-    if (participantsObserver) {
-      participantsObserver.disconnect();
-      participantsObserver = null;
-    }
+// Function to start observing changes in participants
+function observeParticipantsChanges() {
+  if (participantsObserver) {
+    participantsObserver.disconnect();
   }
-}
 
-// Function to set up observer for participant changes
-function setupParticipantObserver() {
-  // Find the container that holds participants
-  // This is a simplified example - you'd need to adapt to Google Meet's actual DOM structure
-  const participantsContainer = document.querySelector(
-    "[data-participants-container]",
-  );
+  // Find participant container
+  const participantContainer =
+    document.querySelector('[aria-label="Participants"]') ||
+    document.querySelector('[jsname="r4nke"]');
 
-  if (participantsContainer && !participantsObserver) {
-    participantsObserver = new MutationObserver(() => {
-      const participants = getParticipants();
+  if (!participantContainer) {
+    console.log("Participants container not found, will retry later");
+    setTimeout(observeParticipantsChanges, 5000);
+    return;
+  }
 
-      // Notify background script of participant changes
-      chrome.runtime.sendMessage({
-        type: "PARTICIPANTS_UPDATED",
-        participants,
+  // Set up observer to detect when participants join or leave
+  participantsObserver = new MutationObserver((mutations) => {
+    const newParticipants = getParticipants();
+
+    // Compare with current participants to detect changes
+    if (
+      JSON.stringify(newParticipants) !== JSON.stringify(currentParticipants)
+    ) {
+      // Detect who joined
+      newParticipants.forEach((newP) => {
+        if (
+          !currentParticipants.some(
+            (p) => p.id === newP.id || p.name === newP.name,
+          )
+        ) {
+          console.log(`Participant joined: ${newP.name}`);
+          // Send event
+          chrome.runtime.sendMessage({
+            action: "participantJoined",
+            participant: newP,
+            meetingId,
+            meetingTitle,
+          });
+        }
       });
-    });
 
-    participantsObserver.observe(participantsContainer, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-    });
-  }
+      // Detect who left
+      currentParticipants.forEach((oldP) => {
+        if (
+          !newParticipants.some((p) => p.id === oldP.id || p.name === oldP.name)
+        ) {
+          console.log(`Participant left: ${oldP.name}`);
+          // Send event
+          chrome.runtime.sendMessage({
+            action: "participantLeft",
+            participant: oldP,
+            meetingId,
+            meetingTitle,
+          });
+        }
+      });
+
+      // Update current participants
+      currentParticipants = newParticipants;
+
+      // Send updated participants list
+      chrome.runtime.sendMessage({
+        action: "participantsUpdated",
+        participants: currentParticipants,
+        meetingId,
+        meetingTitle,
+      });
+    }
+  });
+
+  participantsObserver.observe(participantContainer, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+  });
+
+  console.log("Observing participants changes");
 }
 
 // Function to start recording
-async function startRecording() {
-  if (isRecording) return;
+function startRecording() {
+  if (isRecording) {
+    console.log("Already recording");
+    return;
+  }
 
-  try {
-    console.log("Starting recording...");
-
-    // Request media stream with audio
-    const stream = await navigator.mediaDevices.getUserMedia({
+  // Get video and audio streams
+  navigator.mediaDevices
+    .getDisplayMedia({
+      video: {
+        cursor: "always",
+      },
       audio: true,
-      video: false,
-    });
+    })
+    .then((stream) => {
+      // Create a media recorder
+      mediaRecorder = new MediaRecorder(stream);
+      recordedChunks = [];
 
-    // Create media recorder
-    mediaRecorder = new MediaRecorder(stream);
-    recordedChunks = [];
-
-    // Set up event handlers
-    mediaRecorder.ondataavailable = (event) => {
-      if (event.data.size > 0) {
-        recordedChunks.push(event.data);
-      }
-    };
-
-    mediaRecorder.onstop = () => {
-      console.log("Recording stopped, processing data...");
-
-      // Create blob from recorded chunks
-      const blob = new Blob(recordedChunks, { type: "audio/webm" });
-
-      // Send the recording to the background script
-      const reader = new FileReader();
-      reader.readAsDataURL(blob);
-      reader.onloadend = () => {
-        const base64data = reader.result;
-
-        chrome.runtime.sendMessage({
-          type: "RECORDING_COMPLETED",
-          meetingId,
-          title: meetingTitle,
-          recording: base64data,
-          duration: Math.floor((Date.now() - recordingStartTime) / 1000),
-          mimeType: "audio/webm",
-        });
+      // Handle data available event
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          recordedChunks.push(e.data);
+        }
       };
 
-      // Clean up
-      stream.getTracks().forEach((track) => track.stop());
-      isRecording = false;
-    };
+      // Handle recording stop
+      mediaRecorder.onstop = () => {
+        // Combine recorded chunks into a blob
+        const blob = new Blob(recordedChunks, {
+          type: "video/webm",
+        });
 
-    // Start recording
-    const recordingStartTime = Date.now();
-    mediaRecorder.start(1000); // Collect data every second
-    isRecording = true;
+        // Create a download link
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        document.body.appendChild(a);
+        a.style = "display: none";
+        a.href = url;
+        a.download = `${meetingTitle || "Google Meet Recording"}_${new Date().toISOString()}.webm`;
 
-    console.log("Recording started");
-  } catch (error) {
-    console.error("Error starting recording:", error);
-  }
+        // Trigger download
+        a.click();
+
+        // Clean up
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        // Notify that recording has stopped
+        chrome.runtime.sendMessage({
+          action: "recordingStopped",
+          meetingId,
+          meetingTitle,
+        });
+
+        isRecording = false;
+      };
+
+      // Start recording
+      mediaRecorder.start();
+      isRecording = true;
+
+      // Notify that recording has started
+      chrome.runtime.sendMessage({
+        action: "recordingStarted",
+        meetingId,
+        meetingTitle,
+      });
+
+      console.log("Recording started");
+
+      // Add UI indicator that recording is in progress
+      const recordingIndicator = document.createElement("div");
+      recordingIndicator.id = "meet-enhancement-recording-indicator";
+      recordingIndicator.style =
+        "position: fixed; top: 10px; right: 10px; background-color: #f44336; color: white; padding: 5px 10px; border-radius: 5px; z-index: 9999;";
+      recordingIndicator.textContent = "● Recording";
+      document.body.appendChild(recordingIndicator);
+
+      // Add stop recording button
+      const stopButton = document.createElement("button");
+      stopButton.textContent = "Stop Recording";
+      stopButton.style =
+        "margin-left: 10px; background-color: white; color: #f44336; border: none; border-radius: 3px; padding: 2px 5px; cursor: pointer;";
+      stopButton.onclick = stopRecording;
+      recordingIndicator.appendChild(stopButton);
+    })
+    .catch((error) => {
+      console.error("Error starting recording: ", error);
+      alert("Could not start recording: " + error.message);
+    });
 }
 
 // Function to stop recording
 function stopRecording() {
-  if (!isRecording || !mediaRecorder) return;
+  if (!isRecording || !mediaRecorder) {
+    console.log("Not recording");
+    return;
+  }
 
-  console.log("Stopping recording...");
+  // Stop media recorder
   mediaRecorder.stop();
+
+  // Stop all tracks
+  mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+
+  // Remove recording indicator
+  const indicator = document.getElementById(
+    "meet-enhancement-recording-indicator",
+  );
+  if (indicator) {
+    indicator.remove();
+  }
+
+  console.log("Recording stopped");
 }
 
-// Listen for messages from background script
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log("Content script received message:", message);
-
-  if (message.type === "START_RECORDING") {
-    startRecording();
-    sendResponse({ success: true });
-    return true;
+// Function to initialize the enhancement tool
+function initializeEnhancementTool() {
+  // Check if we're in a Google Meet
+  const meetingInfo = extractMeetingInfo();
+  if (!meetingInfo) {
+    console.log("Not in a Google Meet");
+    return;
   }
 
-  if (message.type === "STOP_RECORDING") {
-    stopRecording();
-    sendResponse({ success: true });
-    return true;
-  }
+  meetingId = meetingInfo.meetingId;
+  meetingTitle = getMeetingTitle();
+  meetingDetected = true;
+
+  console.log(`Google Meet detected: ${meetingTitle} (${meetingId})`);
+
+  // Notify background script that we're in a meeting
+  chrome.runtime.sendMessage({
+    action: "meetingDetected",
+    meetingId,
+    meetingTitle,
+    url: meetingInfo.url,
+  });
+
+  // Get initial participants
+  currentParticipants = getParticipants();
+
+  // Start observing participants
+  observeParticipantsChanges();
+
+  // Add UI elements
+  addEnhancementUI();
+
+  // Listen for commands from background script or popup
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message.action === "startRecording") {
+      startRecording();
+      sendResponse({ success: true });
+    } else if (message.action === "stopRecording") {
+      stopRecording();
+      sendResponse({ success: true });
+    } else if (message.action === "getParticipants") {
+      sendResponse({ participants: currentParticipants });
+    } else if (message.action === "getMeetingInfo") {
+      sendResponse({
+        meetingId,
+        meetingTitle,
+        url: meetingInfo.url,
+        isRecording,
+        participants: currentParticipants,
+      });
+    }
+    return true; // Keep the message channel open for async response
+  });
+}
+
+// Function to add enhancement UI elements
+function addEnhancementUI() {
+  // Create toolbar
+  const toolbar = document.createElement("div");
+  toolbar.id = "meet-enhancement-toolbar";
+  toolbar.style =
+    "position: fixed; bottom: 70px; left: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); padding: 8px; z-index: 9999; display: flex; gap: 8px;";
+
+  // Add record button
+  const recordButton = document.createElement("button");
+  recordButton.textContent = "Record Meeting";
+  recordButton.style =
+    "background-color: #1a73e8; color: white; border: none; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 14px;";
+  recordButton.onclick = startRecording;
+  toolbar.appendChild(recordButton);
+
+  // Add participants button
+  const participantsButton = document.createElement("button");
+  participantsButton.textContent = "Participants";
+  participantsButton.style =
+    "background-color: #ffffff; color: #1a73e8; border: 1px solid #1a73e8; border-radius: 4px; padding: 8px 12px; cursor: pointer; font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 14px;";
+  participantsButton.onclick = () => {
+    const panel = document.getElementById(
+      "meet-enhancement-participants-panel",
+    );
+    if (panel) {
+      panel.style.display = panel.style.display === "none" ? "block" : "none";
+      updateParticipantsList();
+    } else {
+      showParticipantsPanel();
+    }
+  };
+  toolbar.appendChild(participantsButton);
+
+  // Add the toolbar to the page
+  document.body.appendChild(toolbar);
+
+  console.log("Enhancement UI added");
+}
+
+// Function to show participants panel
+function showParticipantsPanel() {
+  const panel = document.createElement("div");
+  panel.id = "meet-enhancement-participants-panel";
+  panel.style =
+    "position: fixed; top: 80px; right: 20px; background-color: #ffffff; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.2); padding: 16px; z-index: 9998; width: 250px; max-height: 400px; overflow-y: auto;";
+
+  // Add panel header
+  const header = document.createElement("div");
+  header.style =
+    "display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;";
+
+  const title = document.createElement("h3");
+  title.textContent = "Participants";
+  title.style =
+    "margin: 0; font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 16px; color: #202124;";
+  header.appendChild(title);
+
+  const closeButton = document.createElement("button");
+  closeButton.textContent = "×";
+  closeButton.style =
+    "background: none; border: none; font-size: 20px; cursor: pointer; color: #5f6368;";
+  closeButton.onclick = () => {
+    panel.style.display = "none";
+  };
+  header.appendChild(closeButton);
+
+  panel.appendChild(header);
+
+  // Add participants list container
+  const list = document.createElement("div");
+  list.id = "meet-enhancement-participants-list";
+  panel.appendChild(list);
+
+  // Add the panel to the page
+  document.body.appendChild(panel);
+
+  // Populate the list
+  updateParticipantsList();
+}
+
+// Function to update participants list in the panel
+function updateParticipantsList() {
+  const list = document.getElementById("meet-enhancement-participants-list");
+  if (!list) return;
+
+  // Clear current list
+  list.innerHTML = "";
+
+  // Add participants
+  currentParticipants.forEach((participant) => {
+    const item = document.createElement("div");
+    item.style =
+      "padding: 8px 0; border-bottom: 1px solid #f1f3f4; display: flex; align-items: center;";
+
+    // Status indicators
+    const indicators = document.createElement("div");
+    indicators.style = "display: flex; margin-right: 8px;";
+
+    // Host indicator
+    if (participant.isHost) {
+      const hostBadge = document.createElement("span");
+      hostBadge.textContent = "Host";
+      hostBadge.style =
+        "background-color: #188038; color: white; font-size: 10px; padding: 2px 4px; border-radius: 2px; margin-right: 4px;";
+      indicators.appendChild(hostBadge);
+    }
+
+    // Mute indicator
+    const muteIcon = document.createElement("span");
+    muteIcon.textContent = participant.isMuted ? "🔇" : "🔊";
+    muteIcon.style = "margin-right: 4px;";
+    indicators.appendChild(muteIcon);
+
+    // Camera indicator
+    const cameraIcon = document.createElement("span");
+    cameraIcon.textContent = participant.isCameraOn ? "📹" : "❌";
+    cameraIcon.style = "margin-right: 4px;";
+    indicators.appendChild(cameraIcon);
+
+    // Screen sharing indicator
+    if (participant.isScreenSharing) {
+      const screenIcon = document.createElement("span");
+      screenIcon.textContent = "🖥️";
+      screenIcon.style = "margin-right: 4px;";
+      indicators.appendChild(screenIcon);
+    }
+
+    item.appendChild(indicators);
+
+    // Participant name
+    const name = document.createElement("span");
+    name.textContent = participant.name;
+    name.style =
+      "font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 14px; color: #202124;";
+    item.appendChild(name);
+
+    list.appendChild(item);
+  });
+
+  // Add count
+  const count = document.createElement("div");
+  count.textContent = `Total: ${currentParticipants.length} participant${currentParticipants.length !== 1 ? "s" : ""}`;
+  count.style =
+    "margin-top: 12px; font-family: 'Google Sans', Roboto, Arial, sans-serif; font-size: 14px; color: #5f6368;";
+  list.appendChild(count);
+}
+
+// Run on page load
+window.addEventListener("load", () => {
+  // Wait for Google Meet to fully load
+  setTimeout(() => {
+    initializeEnhancementTool();
+  }, 3000);
 });
 
-// Run detection on page load and periodically
-detectMeeting();
-setInterval(detectMeeting, 5000);
-
-// Also detect on URL changes (for single-page apps)
+// Listen for URL changes (for single-page app navigation)
 let lastUrl = location.href;
 new MutationObserver(() => {
   if (location.href !== lastUrl) {
     lastUrl = location.href;
-    setTimeout(detectMeeting, 1000); // Slight delay to let the page load
+    // Check if we're still in Google Meet
+    setTimeout(() => {
+      if (!meetingDetected) {
+        initializeEnhancementTool();
+      } else {
+        // Check if we've navigated to a different meeting
+        const newMeetingInfo = extractMeetingInfo();
+        if (newMeetingInfo && newMeetingInfo.meetingId !== meetingId) {
+          console.log("Navigated to a different meeting");
+          // Clean up old meeting
+          if (participantsObserver) {
+            participantsObserver.disconnect();
+          }
+          if (isRecording) {
+            stopRecording();
+          }
+          // Remove UI elements
+          const toolbar = document.getElementById("meet-enhancement-toolbar");
+          if (toolbar) toolbar.remove();
+          const panel = document.getElementById(
+            "meet-enhancement-participants-panel",
+          );
+          if (panel) panel.remove();
+
+          // Reset state
+          meetingDetected = false;
+          meetingId = null;
+          meetingTitle = null;
+          currentParticipants = [];
+
+          // Initialize for new meeting
+          initializeEnhancementTool();
+        }
+      }
+    }, 2000);
   }
 }).observe(document, { subtree: true, childList: true });
-
-// Inject a permanent UI overlay
-const overlay = document.createElement("div");
-overlay.style.position = "fixed";
-overlay.style.top = "10px";
-overlay.style.right = "10px";
-overlay.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
-overlay.style.color = "white";
-overlay.style.padding = "10px 15px";
-overlay.style.borderRadius = "8px";
-overlay.style.fontSize = "14px";
-overlay.style.zIndex = "9999";
-overlay.style.boxShadow = "0 2px 10px rgba(0, 0, 0, 0.3)";
-overlay.style.display = "flex";
-overlay.style.flexDirection = "column";
-overlay.style.gap = "8px";
-overlay.style.minWidth = "200px";
-document.body.appendChild(overlay);
-
-// Create controls for the overlay
-const statusIndicator = document.createElement("div");
-statusIndicator.style.display = "flex";
-statusIndicator.style.alignItems = "center";
-statusIndicator.style.gap = "8px";
-overlay.appendChild(statusIndicator);
-
-const statusDot = document.createElement("div");
-statusDot.style.width = "12px";
-statusDot.style.height = "12px";
-statusDot.style.borderRadius = "50%";
-statusDot.style.backgroundColor = "#4CAF50";
-statusIndicator.appendChild(statusDot);
-
-const statusText = document.createElement("div");
-statusText.textContent = "Meet Enhancer Connected";
-statusText.style.fontWeight = "bold";
-statusIndicator.appendChild(statusText);
-
-// Add recording controls
-const controlsContainer = document.createElement("div");
-controlsContainer.style.display = "flex";
-controlsContainer.style.gap = "8px";
-controlsContainer.style.marginTop = "5px";
-overlay.appendChild(controlsContainer);
-
-const recordButton = document.createElement("button");
-recordButton.textContent = "Record";
-recordButton.style.backgroundColor = "#f44336";
-recordButton.style.color = "white";
-recordButton.style.border = "none";
-recordButton.style.borderRadius = "4px";
-recordButton.style.padding = "5px 10px";
-recordButton.style.cursor = "pointer";
-recordButton.style.fontSize = "12px";
-recordButton.style.fontWeight = "bold";
-recordButton.onclick = () => {
-  if (!isRecording) {
-    startRecording();
-  } else {
-    stopRecording();
-  }
-};
-controlsContainer.appendChild(recordButton);
-
-const settingsButton = document.createElement("button");
-settingsButton.textContent = "Settings";
-settingsButton.style.backgroundColor = "#2196F3";
-settingsButton.style.color = "white";
-settingsButton.style.border = "none";
-settingsButton.style.borderRadius = "4px";
-settingsButton.style.padding = "5px 10px";
-settingsButton.style.cursor = "pointer";
-settingsButton.style.fontSize = "12px";
-settingsButton.style.fontWeight = "bold";
-settingsButton.onclick = () => {
-  window.open("https://nice-hofstadter8-blhvp.dev.tempolabs.ai", "_blank");
-};
-controlsContainer.appendChild(settingsButton);
-
-// Add recording timer
-const timerDisplay = document.createElement("div");
-timerDisplay.style.fontSize = "12px";
-timerDisplay.style.color = "#ccc";
-timerDisplay.style.marginTop = "5px";
-timerDisplay.style.display = "none";
-overlay.appendChild(timerDisplay);
-
-let recordingTimer = 0;
-let timerInterval = null;
-
-// Update overlay status
-function updateOverlay() {
-  if (meetingDetected) {
-    overlay.style.display = "flex";
-    statusText.textContent = isRecording
-      ? "Recording in Progress"
-      : "Meet Enhancer Connected";
-    statusDot.style.backgroundColor = isRecording ? "#f44336" : "#4CAF50";
-    recordButton.textContent = isRecording ? "Stop" : "Record";
-
-    if (isRecording) {
-      timerDisplay.style.display = "block";
-      if (!timerInterval) {
-        recordingTimer = 0;
-        timerInterval = setInterval(() => {
-          recordingTimer++;
-          const minutes = Math.floor(recordingTimer / 60);
-          const seconds = recordingTimer % 60;
-          timerDisplay.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
-        }, 1000);
-      }
-    } else {
-      timerDisplay.style.display = "none";
-      if (timerInterval) {
-        clearInterval(timerInterval);
-        timerInterval = null;
-      }
-    }
-  } else {
-    overlay.style.display = "none";
-    if (timerInterval) {
-      clearInterval(timerInterval);
-      timerInterval = null;
-    }
-  }
-}
-
-// Update overlay periodically
-setInterval(updateOverlay, 1000);

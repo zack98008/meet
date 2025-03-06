@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
@@ -13,7 +13,6 @@ import {
 import {
   Table,
   TableBody,
-  TableCaption,
   TableCell,
   TableHead,
   TableHeader,
@@ -22,12 +21,10 @@ import {
 import {
   Clock,
   Download,
-  Filter,
   MoreHorizontal,
   Search,
   UserPlus,
   Users,
-  X,
   Mic,
   MicOff,
   Video,
@@ -36,6 +33,18 @@ import {
   AlertCircle,
 } from "lucide-react";
 
+// Define interface that matches the data structure from the content script
+interface GoogleMeetParticipant {
+  id: string;
+  name: string;
+  isHost: boolean;
+  isMuted: boolean;
+  hasCamera: boolean;
+  isCameraOn: boolean;
+  joinTime: string;
+}
+
+// Our enhanced participant type with additional fields
 interface Participant {
   id: string;
   name: string;
@@ -49,91 +58,160 @@ interface Participant {
 }
 
 interface ParticipantPanelProps {
-  participants?: Participant[];
   meetingStatus?: "in-progress" | "scheduled" | "ended";
   currentView?: "list" | "grid" | "activity";
 }
 
-const defaultParticipants: Participant[] = [
-  {
-    id: "1",
-    name: "John Doe",
-    email: "john.doe@example.com",
-    avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=john",
-    joinTime: "10:00 AM",
-    status: "speaking",
-    duration: "45m",
-    speakingTime: "12m",
-    role: "host",
-  },
-  {
-    id: "2",
-    name: "Jane Smith",
-    email: "jane.smith@example.com",
-    avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=jane",
-    joinTime: "10:05 AM",
-    status: "active",
-    duration: "40m",
-    speakingTime: "8m",
-    role: "co-host",
-  },
-  {
-    id: "3",
-    name: "Robert Johnson",
-    email: "robert@example.com",
-    avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=robert",
-    joinTime: "10:10 AM",
-    status: "muted",
-    duration: "35m",
-    speakingTime: "5m",
-    role: "participant",
-  },
-  {
-    id: "4",
-    name: "Emily Davis",
-    email: "emily@example.com",
-    avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=emily",
-    joinTime: "10:15 AM",
-    status: "video-off",
-    duration: "30m",
-    speakingTime: "3m",
-    role: "participant",
-  },
-  {
-    id: "5",
-    name: "Michael Wilson",
-    email: "michael@example.com",
-    avatar: "https://api.dicebear.com/7.x/avataaars/svg?seed=michael",
-    joinTime: "10:20 AM",
-    status: "inactive",
-    duration: "25m",
-    speakingTime: "0m",
-    role: "guest",
-  },
-];
+// Function to convert Google Meet participant to our enhanced format
+const convertGoogleMeetParticipant = (
+  participant: GoogleMeetParticipant,
+  joinTimes: Record<string, Date>,
+): Participant => {
+  // Generate email if not available
+  const email = `${participant.name.toLowerCase().replace(/\s+/g, ".")}@example.com`;
+
+  // Calculate duration based on join time
+  const joinTimeDate = joinTimes[participant.id] || new Date();
+  const durationMs = Date.now() - joinTimeDate.getTime();
+  const durationMinutes = Math.floor(durationMs / (1000 * 60));
+
+  // Determine status based on mute and camera state
+  let status: Participant["status"] = "active";
+  if (participant.isMuted) {
+    status = "muted";
+  } else if (participant.hasCamera && !participant.isCameraOn) {
+    status = "video-off";
+  }
+
+  // Determine role
+  const role: Participant["role"] = participant.isHost ? "host" : "participant";
+
+  return {
+    id: participant.id,
+    name: participant.name,
+    email,
+    avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${participant.name}`,
+    joinTime: new Date(participant.joinTime).toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    }),
+    status,
+    duration: `${durationMinutes}m`,
+    speakingTime: "0m", // We don't have speaking time data yet
+    role,
+  };
+};
 
 const ParticipantPanel = ({
-  participants = defaultParticipants,
   meetingStatus = "in-progress",
   currentView = "list",
 }: ParticipantPanelProps) => {
   const [view, setView] = useState<"list" | "grid" | "activity">(currentView);
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedParticipants, setSelectedParticipants] = useState<string[]>(
-    [],
-  );
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [joinTimes, setJoinTimes] = useState<Record<string, Date>>({});
+
+  // Set up listener for real data from the content script
+  useEffect(() => {
+    // Store join times to calculate durations
+    const participantJoinTimes: Record<string, Date> = {};
+
+    // Listen for messages from the content script
+    const handleMessage = (message: any) => {
+      if (message.type === "PARTICIPANTS_UPDATED" && message.participants) {
+        const updatedParticipants = message.participants.map(
+          (p: GoogleMeetParticipant) => {
+            // Record join time for new participants
+            if (!participantJoinTimes[p.id]) {
+              participantJoinTimes[p.id] = new Date();
+            }
+            return convertGoogleMeetParticipant(p, participantJoinTimes);
+          },
+        );
+        setJoinTimes(participantJoinTimes);
+        setParticipants(updatedParticipants);
+      }
+    };
+
+    // Setup listener for Chrome extension messages
+    if (chrome?.runtime?.onMessage) {
+      chrome.runtime.onMessage.addListener(handleMessage);
+    }
+
+    // For testing/development, if Chrome API isn't available
+    if (!chrome?.runtime?.onMessage) {
+      // Simulate initial data from content script
+      const mockInitialData = {
+        type: "PARTICIPANTS_UPDATED",
+        participants: [
+          {
+            id: "user-1",
+            name: "You",
+            isHost: true,
+            isMuted: false,
+            hasCamera: true,
+            isCameraOn: true,
+            joinTime: new Date().toISOString(),
+          },
+          {
+            id: "user-2",
+            name: "John Smith",
+            isHost: false,
+            isMuted: true,
+            hasCamera: true,
+            isCameraOn: false,
+            joinTime: new Date().toISOString(),
+          },
+        ],
+      };
+
+      handleMessage(mockInitialData);
+
+      // Simulate updates every 10 seconds for dev environment
+      const interval = setInterval(() => {
+        const randomStatus = Math.random() > 0.5;
+        mockInitialData.participants[1].isMuted = randomStatus;
+        handleMessage(mockInitialData);
+      }, 10000);
+
+      return () => clearInterval(interval);
+    }
+
+    // Cleanup listener when component unmounts
+    return () => {
+      if (chrome?.runtime?.onMessage) {
+        chrome.runtime.onMessage.removeListener(handleMessage);
+      }
+    };
+  }, []);
+
+  // Request participant data on mount
+  useEffect(() => {
+    if (chrome?.runtime?.sendMessage) {
+      // Request initial participant data from content script
+      chrome.runtime.sendMessage({ type: "GET_PARTICIPANTS" }, (response) => {
+        if (response && response.participants) {
+          const initialJoinTimes: Record<string, Date> = {};
+          response.participants.forEach((p: GoogleMeetParticipant) => {
+            initialJoinTimes[p.id] = new Date(p.joinTime);
+          });
+          setJoinTimes(initialJoinTimes);
+
+          const convertedParticipants = response.participants.map(
+            (p: GoogleMeetParticipant) =>
+              convertGoogleMeetParticipant(p, initialJoinTimes),
+          );
+          setParticipants(convertedParticipants);
+        }
+      });
+    }
+  }, []);
 
   const filteredParticipants = participants.filter(
     (participant) =>
       participant.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       participant.email.toLowerCase().includes(searchQuery.toLowerCase()),
   );
-
-  const toggleParticipantSelection = (id: string) => {
-    setSelectedParticipants((prev) =>
-      prev.includes(id) ? prev.filter((pid) => pid !== id) : [...prev, id],
-    );
-  };
 
   const getStatusIcon = (status: Participant["status"]) => {
     switch (status) {
@@ -331,51 +409,146 @@ const ParticipantPanel = ({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredParticipants.map((participant) => (
-                    <TableRow
-                      key={participant.id}
-                      className="border-gray-700 hover:bg-gray-800"
-                    >
-                      <TableCell>
-                        <div className="flex items-center space-x-3">
-                          <Avatar>
-                            <AvatarImage
-                              src={participant.avatar}
-                              alt={participant.name}
-                            />
-                            <AvatarFallback className="bg-gray-700">
-                              {participant.name
-                                .split(" ")
-                                .map((n) => n[0])
-                                .join("")}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div>
-                            <div className="font-medium">
-                              {participant.name}
-                            </div>
-                            <div className="text-xs text-gray-400">
-                              {participant.email}
+                  {filteredParticipants.length > 0 ? (
+                    filteredParticipants.map((participant) => (
+                      <TableRow
+                        key={participant.id}
+                        className="border-gray-700 hover:bg-gray-800"
+                      >
+                        <TableCell>
+                          <div className="flex items-center space-x-3">
+                            <Avatar>
+                              <AvatarImage
+                                src={participant.avatar}
+                                alt={participant.name}
+                              />
+                              <AvatarFallback className="bg-gray-700">
+                                {participant.name
+                                  .split(" ")
+                                  .map((n) => n[0])
+                                  .join("")}
+                              </AvatarFallback>
+                            </Avatar>
+                            <div>
+                              <div className="font-medium">
+                                {participant.name}
+                              </div>
+                              <div className="text-xs text-gray-400">
+                                {participant.email}
+                              </div>
                             </div>
                           </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center space-x-2">
+                            {getStatusIcon(participant.status)}
+                            <span>{getStatusBadge(participant.status)}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{getRoleBadge(participant.role)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center space-x-2">
+                            <Clock className="h-4 w-4 text-gray-400" />
+                            <span>{participant.joinTime}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>{participant.duration}</TableCell>
+                        <TableCell>{participant.speakingTime}</TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 p-0"
+                              >
+                                <MoreHorizontal className="h-4 w-4" />
+                                <span className="sr-only">Open menu</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent
+                              align="end"
+                              className="bg-gray-800 border-gray-700"
+                            >
+                              <DropdownMenuItem className="text-white hover:bg-gray-700">
+                                Mute participant
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-white hover:bg-gray-700">
+                                Stop video
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-white hover:bg-gray-700">
+                                Make host
+                              </DropdownMenuItem>
+                              <DropdownMenuItem className="text-white hover:bg-gray-700">
+                                Remove participant
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={7} className="text-center py-6">
+                        <div className="text-gray-400">
+                          No participants found or waiting for data...
                         </div>
                       </TableCell>
-                      <TableCell>
-                        <div className="flex items-center space-x-2">
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {view === "grid" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto">
+              {filteredParticipants.length > 0 ? (
+                filteredParticipants.map((participant) => (
+                  <Card
+                    key={participant.id}
+                    className="bg-gray-800 border-gray-700 overflow-hidden"
+                  >
+                    <div className="relative">
+                      <div className="absolute top-2 right-2 z-10 flex space-x-1">
+                        <Badge
+                          variant="outline"
+                          className="bg-gray-900 bg-opacity-70 border-0"
+                        >
                           {getStatusIcon(participant.status)}
-                          <span>{getStatusBadge(participant.status)}</span>
+                        </Badge>
+                        <Badge
+                          variant="outline"
+                          className="bg-gray-900 bg-opacity-70 border-0"
+                        >
+                          {participant.duration}
+                        </Badge>
+                      </div>
+                      <div className="h-40 bg-gray-700 flex items-center justify-center">
+                        <Avatar className="h-20 w-20">
+                          <AvatarImage
+                            src={participant.avatar}
+                            alt={participant.name}
+                          />
+                          <AvatarFallback className="text-2xl bg-gray-600">
+                            {participant.name
+                              .split(" ")
+                              .map((n) => n[0])
+                              .join("")}
+                          </AvatarFallback>
+                        </Avatar>
+                      </div>
+                    </div>
+                    <CardContent className="p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <h3 className="font-medium truncate">
+                            {participant.name}
+                          </h3>
+                          <p className="text-xs text-gray-400 truncate">
+                            {participant.email}
+                          </p>
                         </div>
-                      </TableCell>
-                      <TableCell>{getRoleBadge(participant.role)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center space-x-2">
-                          <Clock className="h-4 w-4 text-gray-400" />
-                          <span>{participant.joinTime}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>{participant.duration}</TableCell>
-                      <TableCell>{participant.speakingTime}</TableCell>
-                      <TableCell>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button
@@ -405,102 +578,23 @@ const ParticipantPanel = ({
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-
-          {view === "grid" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 overflow-y-auto">
-              {filteredParticipants.map((participant) => (
-                <Card
-                  key={participant.id}
-                  className="bg-gray-800 border-gray-700 overflow-hidden"
-                >
-                  <div className="relative">
-                    <div className="absolute top-2 right-2 z-10 flex space-x-1">
-                      <Badge
-                        variant="outline"
-                        className="bg-gray-900 bg-opacity-70 border-0"
-                      >
-                        {getStatusIcon(participant.status)}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className="bg-gray-900 bg-opacity-70 border-0"
-                      >
-                        {participant.duration}
-                      </Badge>
-                    </div>
-                    <div className="h-40 bg-gray-700 flex items-center justify-center">
-                      <Avatar className="h-20 w-20">
-                        <AvatarImage
-                          src={participant.avatar}
-                          alt={participant.name}
-                        />
-                        <AvatarFallback className="text-2xl bg-gray-600">
-                          {participant.name
-                            .split(" ")
-                            .map((n) => n[0])
-                            .join("")}
-                        </AvatarFallback>
-                      </Avatar>
-                    </div>
-                  </div>
-                  <CardContent className="p-4">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h3 className="font-medium truncate">
-                          {participant.name}
-                        </h3>
-                        <p className="text-xs text-gray-400 truncate">
-                          {participant.email}
-                        </p>
                       </div>
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 p-0"
-                          >
-                            <MoreHorizontal className="h-4 w-4" />
-                            <span className="sr-only">Open menu</span>
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent
-                          align="end"
-                          className="bg-gray-800 border-gray-700"
-                        >
-                          <DropdownMenuItem className="text-white hover:bg-gray-700">
-                            Mute participant
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-white hover:bg-gray-700">
-                            Stop video
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-white hover:bg-gray-700">
-                            Make host
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-white hover:bg-gray-700">
-                            Remove participant
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-                    <div className="flex flex-wrap gap-2 mt-2">
-                      {getRoleBadge(participant.role)}
-                      {getStatusBadge(participant.status)}
-                    </div>
-                    <div className="mt-3 text-xs text-gray-400 flex items-center">
-                      <Clock className="h-3 w-3 mr-1" />
-                      <span>Joined at {participant.joinTime}</span>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                      <div className="flex flex-wrap gap-2 mt-2">
+                        {getRoleBadge(participant.role)}
+                        {getStatusBadge(participant.status)}
+                      </div>
+                      <div className="mt-3 text-xs text-gray-400 flex items-center">
+                        <Clock className="h-3 w-3 mr-1" />
+                        <span>Joined at {participant.joinTime}</span>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : (
+                <div className="col-span-full flex items-center justify-center h-40 text-gray-400">
+                  No participants found or waiting for data...
+                </div>
+              )}
             </div>
           )}
 
@@ -510,57 +604,63 @@ const ParticipantPanel = ({
                 <CardTitle>Participant Activity</CardTitle>
               </CardHeader>
               <CardContent className="overflow-y-auto">
-                <div className="space-y-4">
-                  {filteredParticipants.map((participant) => (
-                    <div
-                      key={participant.id}
-                      className="p-3 bg-gray-700 rounded-md flex items-start space-x-3"
-                    >
-                      <Avatar>
-                        <AvatarImage
-                          src={participant.avatar}
-                          alt={participant.name}
-                        />
-                        <AvatarFallback className="bg-gray-600">
-                          {participant.name
-                            .split(" ")
-                            .map((n) => n[0])
-                            .join("")}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="flex-1">
-                        <div className="flex justify-between">
-                          <div>
-                            <span className="font-medium">
-                              {participant.name}
-                            </span>{" "}
-                            <span className="text-sm text-gray-400">
-                              ({participant.role})
+                {filteredParticipants.length > 0 ? (
+                  <div className="space-y-4">
+                    {filteredParticipants.map((participant) => (
+                      <div
+                        key={participant.id}
+                        className="p-3 bg-gray-700 rounded-md flex items-start space-x-3"
+                      >
+                        <Avatar>
+                          <AvatarImage
+                            src={participant.avatar}
+                            alt={participant.name}
+                          />
+                          <AvatarFallback className="bg-gray-600">
+                            {participant.name
+                              .split(" ")
+                              .map((n) => n[0])
+                              .join("")}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="flex-1">
+                          <div className="flex justify-between">
+                            <div>
+                              <span className="font-medium">
+                                {participant.name}
+                              </span>{" "}
+                              <span className="text-sm text-gray-400">
+                                ({participant.role})
+                              </span>
+                            </div>
+                            <span className="text-xs text-gray-400">
+                              {participant.joinTime}
                             </span>
                           </div>
-                          <span className="text-xs text-gray-400">
-                            {participant.joinTime}
-                          </span>
-                        </div>
-                        <p className="text-sm mt-1">
-                          {participant.status === "speaking"
-                            ? "Currently speaking"
-                            : participant.status === "muted"
-                              ? "Currently muted"
-                              : participant.status === "video-off"
-                                ? "Video turned off"
-                                : participant.status === "inactive"
-                                  ? "Inactive for some time"
-                                  : "Active in the meeting"}
-                        </p>
-                        <div className="flex items-center justify-between mt-2 text-xs text-gray-400">
-                          <div>Duration: {participant.duration}</div>
-                          <div>Speaking time: {participant.speakingTime}</div>
+                          <p className="text-sm mt-1">
+                            {participant.status === "speaking"
+                              ? "Currently speaking"
+                              : participant.status === "muted"
+                                ? "Currently muted"
+                                : participant.status === "video-off"
+                                  ? "Video turned off"
+                                  : participant.status === "inactive"
+                                    ? "Inactive for some time"
+                                    : "Active in the meeting"}
+                          </p>
+                          <div className="flex items-center justify-between mt-2 text-xs text-gray-400">
+                            <div>Duration: {participant.duration}</div>
+                            <div>Speaking time: {participant.speakingTime}</div>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center h-40 text-gray-400">
+                    No participants found or waiting for data...
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

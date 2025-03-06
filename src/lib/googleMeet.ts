@@ -46,16 +46,25 @@ async function saveParticipantsToSupabase(
     // Process each participant
     for (const participant of participants) {
       // Check if participant already exists
-      const { data: existingParticipant } = await supabase
+      const { data: existingParticipants, error: queryError } = await supabase
         .from("participants")
         .select("id")
         .eq("meeting_id", meetingId)
-        .eq("participant_id", participant.id)
-        .single();
+        .eq("participant_id", participant.id);
+
+      if (queryError) {
+        console.error("Error querying participant:", queryError);
+        continue;
+      }
+
+      const existingParticipant =
+        existingParticipants && existingParticipants.length > 0
+          ? existingParticipants[0]
+          : null;
 
       if (existingParticipant) {
         // Update existing participant
-        await supabase
+        const { error: updateError } = await supabase
           .from("participants")
           .update({
             is_muted: participant.isMuted,
@@ -63,19 +72,29 @@ async function saveParticipantsToSupabase(
             updated_at: new Date().toISOString(),
           })
           .eq("id", existingParticipant.id);
+
+        if (updateError) {
+          console.error("Error updating participant:", updateError);
+        }
       } else {
         // Insert new participant
-        await supabase.from("participants").insert({
-          meeting_id: meetingId,
-          participant_id: participant.id,
-          name: participant.name,
-          email: participant.email,
-          is_host: participant.isHost,
-          is_muted: participant.isMuted,
-          has_camera: participant.hasCamera,
-          is_camera_on: participant.isCameraOn,
-          join_time: participant.joinTime || new Date().toISOString(),
-        });
+        const { error: insertError } = await supabase
+          .from("participants")
+          .insert({
+            meeting_id: meetingId,
+            participant_id: participant.id,
+            name: participant.name,
+            email: participant.email,
+            is_host: participant.isHost,
+            is_muted: participant.isMuted,
+            has_camera: participant.hasCamera,
+            is_camera_on: participant.isCameraOn,
+            join_time: participant.joinTime || new Date().toISOString(),
+          });
+
+        if (insertError) {
+          console.error("Error inserting participant:", insertError);
+        }
       }
     }
   } catch (error) {
