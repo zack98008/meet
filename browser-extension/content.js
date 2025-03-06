@@ -59,27 +59,120 @@ function getMeetingTitle() {
 function getParticipants() {
   const participants = [];
 
-  // Try to find participant elements in the DOM
-  // Note: This is a simplified version and would need to be adapted to Google Meet's actual DOM structure
-  const participantElements = document.querySelectorAll(
-    "[data-participant-id]",
-  );
+  // Try to find the participants panel
+  // Google Meet's DOM structure changes frequently, so we need to try multiple selectors
+  const participantContainers = [
+    // Main participants panel
+    document.querySelectorAll('[aria-label="Participants"] [role="listitem"]'),
+    // Fallback: try other common selectors
+    document.querySelectorAll("[data-participant-id]"),
+    document.querySelectorAll("[data-participant-name]"),
+    // Another common pattern in Google Meet
+    document.querySelectorAll('[jsname="r4nke"]'),
+  ];
 
-  participantElements.forEach((element) => {
-    const id = element.getAttribute("data-participant-id");
-    const name =
-      element.querySelector(".participant-name")?.textContent || "Unknown";
-    const isHost = element.classList.contains("is-host");
-    const isMuted = element.querySelector(".muted-icon") !== null;
+  // Use the first non-empty container
+  let participantElements = [];
+  for (const container of participantContainers) {
+    if (container && container.length > 0) {
+      participantElements = container;
+      break;
+    }
+  }
 
+  // If we still don't have participants, try to find them in the video grid
+  if (participantElements.length === 0) {
+    const videoElements = document.querySelectorAll("video");
+    videoElements.forEach((video, index) => {
+      // Try to find the participant name near the video
+      let name = "Unknown";
+      const nameElement =
+        video.closest("[data-participant-name]") ||
+        video.closest('[jsname="r4nke"]');
+
+      if (nameElement) {
+        name =
+          nameElement.getAttribute("data-participant-name") ||
+          nameElement.textContent ||
+          `Participant ${index + 1}`;
+      }
+
+      participants.push({
+        id: `video-participant-${index}`,
+        name: name.trim(),
+        isHost: false, // Can't reliably determine from video grid
+        isMuted: video.muted,
+        hasCamera: true,
+        isCameraOn: !video.paused,
+        joinTime: new Date().toISOString(),
+      });
+    });
+  } else {
+    // Process the participant elements we found
+    participantElements.forEach((element, index) => {
+      // Try different ways to get the participant ID
+      const id =
+        element.getAttribute("data-participant-id") ||
+        element.getAttribute("id") ||
+        `participant-${index}`;
+
+      // Try different ways to get the name
+      let name = "Unknown";
+      const nameElement =
+        element.querySelector("[data-participant-name]") ||
+        element.querySelector(".participant-name") ||
+        element;
+
+      if (nameElement) {
+        name =
+          nameElement.getAttribute("data-participant-name") ||
+          nameElement.textContent ||
+          `Participant ${index + 1}`;
+      }
+
+      // Check for host status
+      const isHost =
+        element.classList.contains("is-host") ||
+        element.querySelector(".host-badge") !== null ||
+        name.includes("(You)") ||
+        name.includes("(Host)");
+
+      // Check for mute status
+      const isMuted =
+        element.classList.contains("is-muted") ||
+        element.querySelector(".muted-icon") !== null ||
+        element.querySelector('[aria-label*="muted"]') !== null;
+
+      // Check for camera status
+      const cameraElement = element.querySelector('[aria-label*="camera"]');
+      const hasCamera = cameraElement !== null;
+      const isCameraOn =
+        hasCamera && !cameraElement.getAttribute("aria-label").includes("off");
+
+      participants.push({
+        id,
+        name: name.trim(),
+        isHost,
+        isMuted,
+        hasCamera,
+        isCameraOn,
+        joinTime: new Date().toISOString(),
+      });
+    });
+  }
+
+  // If we still have no participants but we're in a meeting, add at least the current user
+  if (participants.length === 0 && meetingDetected) {
     participants.push({
-      id,
-      name,
-      isHost,
-      isMuted,
+      id: "current-user",
+      name: "You",
+      isHost: true,
+      isMuted: false,
+      hasCamera: true,
+      isCameraOn: true,
       joinTime: new Date().toISOString(),
     });
-  });
+  }
 
   return participants;
 }
@@ -264,34 +357,131 @@ new MutationObserver(() => {
   }
 }).observe(document, { subtree: true, childList: true });
 
-// Inject a small UI indicator
-const indicator = document.createElement("div");
-indicator.style.position = "fixed";
-indicator.style.bottom = "10px";
-indicator.style.right = "10px";
-indicator.style.backgroundColor = "rgba(0, 0, 0, 0.7)";
-indicator.style.color = "white";
-indicator.style.padding = "5px 10px";
-indicator.style.borderRadius = "4px";
-indicator.style.fontSize = "12px";
-indicator.style.zIndex = "9999";
-indicator.style.display = "none";
-document.body.appendChild(indicator);
+// Inject a permanent UI overlay
+const overlay = document.createElement("div");
+overlay.style.position = "fixed";
+overlay.style.top = "10px";
+overlay.style.right = "10px";
+overlay.style.backgroundColor = "rgba(0, 0, 0, 0.8)";
+overlay.style.color = "white";
+overlay.style.padding = "10px 15px";
+overlay.style.borderRadius = "8px";
+overlay.style.fontSize = "14px";
+overlay.style.zIndex = "9999";
+overlay.style.boxShadow = "0 2px 10px rgba(0, 0, 0, 0.3)";
+overlay.style.display = "flex";
+overlay.style.flexDirection = "column";
+overlay.style.gap = "8px";
+overlay.style.minWidth = "200px";
+document.body.appendChild(overlay);
 
-// Update indicator status
-function updateIndicator() {
-  if (meetingDetected) {
-    indicator.style.display = "block";
-    indicator.textContent = isRecording
-      ? "🔴 Recording"
-      : "🟢 Meet Enhancer Connected";
-    indicator.style.backgroundColor = isRecording
-      ? "rgba(255, 0, 0, 0.7)"
-      : "rgba(0, 0, 0, 0.7)";
+// Create controls for the overlay
+const statusIndicator = document.createElement("div");
+statusIndicator.style.display = "flex";
+statusIndicator.style.alignItems = "center";
+statusIndicator.style.gap = "8px";
+overlay.appendChild(statusIndicator);
+
+const statusDot = document.createElement("div");
+statusDot.style.width = "12px";
+statusDot.style.height = "12px";
+statusDot.style.borderRadius = "50%";
+statusDot.style.backgroundColor = "#4CAF50";
+statusIndicator.appendChild(statusDot);
+
+const statusText = document.createElement("div");
+statusText.textContent = "Meet Enhancer Connected";
+statusText.style.fontWeight = "bold";
+statusIndicator.appendChild(statusText);
+
+// Add recording controls
+const controlsContainer = document.createElement("div");
+controlsContainer.style.display = "flex";
+controlsContainer.style.gap = "8px";
+controlsContainer.style.marginTop = "5px";
+overlay.appendChild(controlsContainer);
+
+const recordButton = document.createElement("button");
+recordButton.textContent = "Record";
+recordButton.style.backgroundColor = "#f44336";
+recordButton.style.color = "white";
+recordButton.style.border = "none";
+recordButton.style.borderRadius = "4px";
+recordButton.style.padding = "5px 10px";
+recordButton.style.cursor = "pointer";
+recordButton.style.fontSize = "12px";
+recordButton.style.fontWeight = "bold";
+recordButton.onclick = () => {
+  if (!isRecording) {
+    startRecording();
   } else {
-    indicator.style.display = "none";
+    stopRecording();
+  }
+};
+controlsContainer.appendChild(recordButton);
+
+const settingsButton = document.createElement("button");
+settingsButton.textContent = "Settings";
+settingsButton.style.backgroundColor = "#2196F3";
+settingsButton.style.color = "white";
+settingsButton.style.border = "none";
+settingsButton.style.borderRadius = "4px";
+settingsButton.style.padding = "5px 10px";
+settingsButton.style.cursor = "pointer";
+settingsButton.style.fontSize = "12px";
+settingsButton.style.fontWeight = "bold";
+settingsButton.onclick = () => {
+  window.open("https://nice-hofstadter8-blhvp.dev.tempolabs.ai", "_blank");
+};
+controlsContainer.appendChild(settingsButton);
+
+// Add recording timer
+const timerDisplay = document.createElement("div");
+timerDisplay.style.fontSize = "12px";
+timerDisplay.style.color = "#ccc";
+timerDisplay.style.marginTop = "5px";
+timerDisplay.style.display = "none";
+overlay.appendChild(timerDisplay);
+
+let recordingTimer = 0;
+let timerInterval = null;
+
+// Update overlay status
+function updateOverlay() {
+  if (meetingDetected) {
+    overlay.style.display = "flex";
+    statusText.textContent = isRecording
+      ? "Recording in Progress"
+      : "Meet Enhancer Connected";
+    statusDot.style.backgroundColor = isRecording ? "#f44336" : "#4CAF50";
+    recordButton.textContent = isRecording ? "Stop" : "Record";
+
+    if (isRecording) {
+      timerDisplay.style.display = "block";
+      if (!timerInterval) {
+        recordingTimer = 0;
+        timerInterval = setInterval(() => {
+          recordingTimer++;
+          const minutes = Math.floor(recordingTimer / 60);
+          const seconds = recordingTimer % 60;
+          timerDisplay.textContent = `${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
+        }, 1000);
+      }
+    } else {
+      timerDisplay.style.display = "none";
+      if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+      }
+    }
+  } else {
+    overlay.style.display = "none";
+    if (timerInterval) {
+      clearInterval(timerInterval);
+      timerInterval = null;
+    }
   }
 }
 
-// Update indicator periodically
-setInterval(updateIndicator, 1000);
+// Update overlay periodically
+setInterval(updateOverlay, 1000);

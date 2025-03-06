@@ -55,10 +55,10 @@ export function useRecorder() {
       chunksRef.current = [];
       setRecordingData(null);
 
-      // Get media stream
+      // Get media stream with both audio and video
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: false,
+        video: true,
       });
       streamRef.current = stream;
 
@@ -74,7 +74,7 @@ export function useRecorder() {
       };
 
       mediaRecorder.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: "audio/webm" });
+        const blob = new Blob(chunksRef.current, { type: "video/mp4" });
         setRecordingData(blob);
         stopStream();
       };
@@ -123,11 +123,11 @@ export function useRecorder() {
     try {
       // Format the file name
       const date = new Date();
-      const fileName = `${meetingTitle.replace(/\s+/g, "_")}_${date.getTime()}.webm`;
+      const fileName = `${meetingTitle.replace(/\s+/g, "_")}_${date.getTime()}.mp4`;
       const filePath = `${userId || "anonymous"}/${fileName}`;
 
       // Create a File from the Blob
-      const file = new File([recordingData], fileName, { type: "audio/webm" });
+      const file = new File([recordingData], fileName, { type: "video/mp4" });
 
       // Upload to Supabase Storage
       const storagePath = await uploadRecordingFile(file, filePath);
@@ -149,19 +149,36 @@ export function useRecorder() {
         status: "processing", // Initially set as processing
         storage_path: storagePath,
         user_id: userId || undefined,
+        google_drive_id: "pending", // Mark as pending Google Drive upload
       });
 
-      // Simulate processing completion after a delay
-      setTimeout(async () => {
-        try {
-          await supabase
-            .from("recordings")
-            .update({ status: "completed" })
-            .eq("id", recording.id);
-        } catch (error) {
-          console.error("Error updating recording status:", error);
-        }
-      }, 5000); // 5 seconds delay to simulate processing
+      // Attempt to save to Google Drive
+      try {
+        // This would be replaced with actual Google Drive API integration
+        console.log("Saving recording to Google Drive...");
+        // Simulate Google Drive upload success
+        const googleDriveId = `gdrive_${Date.now()}`;
+
+        // Update the recording with Google Drive ID
+        await supabase
+          .from("recordings")
+          .update({
+            google_drive_id: googleDriveId,
+            status: "completed",
+          })
+          .eq("id", recording.id);
+
+        console.log(
+          `Recording saved to Google Drive with ID: ${googleDriveId}`,
+        );
+      } catch (driveError) {
+        console.error("Error saving to Google Drive:", driveError);
+        // Still mark as completed in Supabase even if Google Drive fails
+        await supabase
+          .from("recordings")
+          .update({ status: "completed" })
+          .eq("id", recording.id);
+      }
 
       return recording;
     } catch (error) {

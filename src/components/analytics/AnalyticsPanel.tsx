@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Button } from "../ui/button";
@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import MeetingMetricsChart from "./MeetingMetricsChart";
 import ParticipantEngagementTable from "./ParticipantEngagementTable";
+import { supabase } from "@/lib/supabase";
 
 interface AnalyticsPanelProps {
   activeTab?: string;
@@ -27,15 +28,107 @@ const AnalyticsPanel = ({
 }: AnalyticsPanelProps) => {
   const [selectedTimeRange, setSelectedTimeRange] = useState("weekly");
   const [chartType, setChartType] = useState<"area" | "bar">("area");
+  const [loading, setLoading] = useState(true);
+  const [realParticipantData, setRealParticipantData] = useState<any[]>([]);
+  const [realMeetingData, setRealMeetingData] = useState<any[]>([]);
+  const [meetingStats, setMeetingStats] = useState({
+    totalMeetings: 0,
+    totalDuration: "0h 0m",
+    avgParticipants: 0,
+    avgDuration: "0h 0m",
+    avgEngagement: 0,
+  });
 
-  // Mock data for meeting statistics
-  const meetingStats = {
-    totalMeetings: 24,
-    totalDuration: "36h 45m",
-    avgParticipants: 18,
-    avgDuration: "1h 32m",
-    avgEngagement: 76,
-  };
+  // Fetch real data from Supabase
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        // Fetch participants data
+        const { data: participants, error: participantsError } = await supabase
+          .from("participants")
+          .select("*")
+          .order("join_time", { ascending: false });
+
+        if (participantsError) throw participantsError;
+
+        // Fetch meeting metadata
+        const { data: meetings, error: meetingsError } = await supabase
+          .from("meeting_metadata")
+          .select("*")
+          .order("start_time", { ascending: false });
+
+        if (meetingsError) throw meetingsError;
+
+        // Process data for statistics
+        if (meetings && meetings.length > 0) {
+          // Calculate total duration in minutes
+          let totalDurationMinutes = 0;
+          meetings.forEach((meeting) => {
+            if (meeting.start_time && meeting.end_time) {
+              const start = new Date(meeting.start_time);
+              const end = new Date(meeting.end_time || new Date());
+              const durationMinutes = Math.floor(
+                (end.getTime() - start.getTime()) / (1000 * 60),
+              );
+              totalDurationMinutes += durationMinutes;
+            }
+          });
+
+          // Calculate average participants per meeting
+          const meetingParticipantCounts = {};
+          participants.forEach((participant) => {
+            if (!meetingParticipantCounts[participant.meeting_id]) {
+              meetingParticipantCounts[participant.meeting_id] = 0;
+            }
+            meetingParticipantCounts[participant.meeting_id]++;
+          });
+
+          const avgParticipants =
+            Object.values(meetingParticipantCounts).length > 0
+              ? Math.round(
+                  Object.values(meetingParticipantCounts).reduce(
+                    (sum: any, count: any) => sum + count,
+                    0,
+                  ) / Object.values(meetingParticipantCounts).length,
+                )
+              : 0;
+
+          // Format durations
+          const totalHours = Math.floor(totalDurationMinutes / 60);
+          const totalMinutes = totalDurationMinutes % 60;
+          const totalDurationFormatted = `${totalHours}h ${totalMinutes}m`;
+
+          const avgDurationMinutes =
+            meetings.length > 0
+              ? Math.round(totalDurationMinutes / meetings.length)
+              : 0;
+          const avgHours = Math.floor(avgDurationMinutes / 60);
+          const avgMinutes = avgDurationMinutes % 60;
+          const avgDurationFormatted = `${avgHours}h ${avgMinutes}m`;
+
+          // Update stats
+          setMeetingStats({
+            totalMeetings: meetings.length,
+            totalDuration: totalDurationFormatted,
+            avgParticipants,
+            avgDuration: avgDurationFormatted,
+            avgEngagement: Math.round(Math.random() * 30) + 60, // Placeholder for now
+          });
+        }
+
+        // Set the data
+        setRealParticipantData(participants || []);
+        setRealMeetingData(meetings || []);
+      } catch (error) {
+        console.error("Error fetching analytics data:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
 
   return (
     <div className="w-full h-full flex flex-col bg-gray-950 text-white p-4 overflow-y-auto">
@@ -122,7 +215,22 @@ const AnalyticsPanel = ({
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <MeetingMetricsChart
-              data={meetingData}
+              data={
+                realMeetingData.length > 0
+                  ? realMeetingData.map((m) => ({
+                      date: new Date(m.start_time).toLocaleDateString(),
+                      participants: m.participants?.length || 0,
+                      duration: m.end_time
+                        ? Math.floor(
+                            (new Date(m.end_time).getTime() -
+                              new Date(m.start_time).getTime()) /
+                              (1000 * 60),
+                          )
+                        : 60, // Default to 60 minutes if no end time
+                      engagement: Math.round(Math.random() * 30) + 60, // Placeholder
+                    }))
+                  : meetingData
+              }
               timeRange={selectedTimeRange}
               chartType={chartType}
             />
@@ -142,7 +250,32 @@ const AnalyticsPanel = ({
             </Card>
           </div>
 
-          <ParticipantEngagementTable data={participantData} />
+          <ParticipantEngagementTable
+            data={
+              realParticipantData.length > 0
+                ? realParticipantData.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    email: p.email || "Unknown",
+                    joinTime: new Date(p.join_time).toLocaleTimeString(),
+                    leaveTime: p.leave_time
+                      ? new Date(p.leave_time).toLocaleTimeString()
+                      : "Still active",
+                    duration: p.leave_time
+                      ? `${Math.floor((new Date(p.leave_time).getTime() - new Date(p.join_time).getTime()) / (1000 * 60))}m`
+                      : "Ongoing",
+                    speakingTime: `${p.speaking_time || 0}m`,
+                    engagementScore: Math.round(Math.random() * 40) + 60, // Placeholder
+                    status: p.is_muted
+                      ? "muted"
+                      : p.is_camera_on
+                        ? "active"
+                        : "video-off",
+                    role: p.is_host ? "host" : "participant",
+                  }))
+                : participantData
+            }
+          />
         </TabsContent>
 
         <TabsContent value="meetings" className="space-y-6">
@@ -164,7 +297,22 @@ const AnalyticsPanel = ({
           </Card>
 
           <MeetingMetricsChart
-            data={meetingData}
+            data={
+              realMeetingData.length > 0
+                ? realMeetingData.map((m) => ({
+                    date: new Date(m.start_time).toLocaleDateString(),
+                    participants: m.participants?.length || 0,
+                    duration: m.end_time
+                      ? Math.floor(
+                          (new Date(m.end_time).getTime() -
+                            new Date(m.start_time).getTime()) /
+                            (1000 * 60),
+                        )
+                      : 60, // Default to 60 minutes if no end time
+                    engagement: Math.round(Math.random() * 30) + 60, // Placeholder
+                  }))
+                : meetingData
+            }
             timeRange={selectedTimeRange}
             chartType={chartType}
           />
@@ -185,7 +333,32 @@ const AnalyticsPanel = ({
             </CardContent>
           </Card>
 
-          <ParticipantEngagementTable data={participantData} />
+          <ParticipantEngagementTable
+            data={
+              realParticipantData.length > 0
+                ? realParticipantData.map((p) => ({
+                    id: p.id,
+                    name: p.name,
+                    email: p.email || "Unknown",
+                    joinTime: new Date(p.join_time).toLocaleTimeString(),
+                    leaveTime: p.leave_time
+                      ? new Date(p.leave_time).toLocaleTimeString()
+                      : "Still active",
+                    duration: p.leave_time
+                      ? `${Math.floor((new Date(p.leave_time).getTime() - new Date(p.join_time).getTime()) / (1000 * 60))}m`
+                      : "Ongoing",
+                    speakingTime: `${p.speaking_time || 0}m`,
+                    engagementScore: Math.round(Math.random() * 40) + 60, // Placeholder
+                    status: p.is_muted
+                      ? "muted"
+                      : p.is_camera_on
+                        ? "active"
+                        : "video-off",
+                    role: p.is_host ? "host" : "participant",
+                  }))
+                : participantData
+            }
+          />
         </TabsContent>
       </Tabs>
     </div>

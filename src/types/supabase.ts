@@ -45,11 +45,93 @@ export type Database = {
         }
         Relationships: []
       }
+      participants: {
+        Row: {
+          created_at: string | null
+          email: string | null
+          has_camera: boolean | null
+          id: string
+          is_camera_on: boolean | null
+          is_host: boolean | null
+          is_muted: boolean | null
+          join_time: string | null
+          leave_time: string | null
+          meeting_id: string
+          name: string
+          participant_id: string | null
+          speaking_time: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          email?: string | null
+          has_camera?: boolean | null
+          id?: string
+          is_camera_on?: boolean | null
+          is_host?: boolean | null
+          is_muted?: boolean | null
+          join_time?: string | null
+          leave_time?: string | null
+          meeting_id: string
+          name: string
+          participant_id?: string | null
+          speaking_time?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          email?: string | null
+          has_camera?: boolean | null
+          id?: string
+          is_camera_on?: boolean | null
+          is_host?: boolean | null
+          is_muted?: boolean | null
+          join_time?: string | null
+          leave_time?: string | null
+          meeting_id?: string
+          name?: string
+          participant_id?: string | null
+          speaking_time?: number | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string | null
+          email: string | null
+          first_name: string | null
+          id: string
+          last_name: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string | null
+          email?: string | null
+          first_name?: string | null
+          id: string
+          last_name?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string | null
+          email?: string | null
+          first_name?: string | null
+          id?: string
+          last_name?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
       recordings: {
         Row: {
           created_at: string | null
           date: string | null
           duration: string | null
+          google_drive_id: string | null
           id: string
           meeting_id: string | null
           meeting_metadata_id: string | null
@@ -64,6 +146,7 @@ export type Database = {
           created_at?: string | null
           date?: string | null
           duration?: string | null
+          google_drive_id?: string | null
           id?: string
           meeting_id?: string | null
           meeting_metadata_id?: string | null
@@ -78,6 +161,7 @@ export type Database = {
           created_at?: string | null
           date?: string | null
           duration?: string | null
+          google_drive_id?: string | null
           id?: string
           meeting_id?: string | null
           meeting_metadata_id?: string | null

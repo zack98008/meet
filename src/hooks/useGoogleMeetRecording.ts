@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRecorder } from "./useRecorder";
 import { connectToGoogleMeet, useGoogleMeetDetection } from "@/lib/googleMeet";
 import { supabase } from "@/lib/supabase";
+import { GoogleMeetParticipant } from "@/lib/googleMeetApi";
 
 export interface MeetingMetadata {
   meetingId: string;
@@ -70,6 +71,12 @@ export function useGoogleMeetRecording(autoRecord: boolean = false) {
 
         setMeetingMetadata(metadata);
         saveMeetingMetadata(metadata);
+
+        // Also save participants to the participants table
+        saveParticipantsData(
+          meetStatus.meetingData.meetingId,
+          meetStatus.meetingData.participants,
+        );
       }
     } else {
       setMeetingStatus("not-started");

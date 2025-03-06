@@ -22,12 +22,65 @@ export function detectGoogleMeet(): GoogleMeetStatus {
     return { inMeeting: false };
   }
 
+  // Save participant data to Supabase
+  if (meeting.participants && meeting.participants.length > 0) {
+    saveParticipantsToSupabase(meeting.meetingId, meeting.participants);
+  }
+
   return {
     inMeeting: true,
     meetingId: meeting.meetingId,
     meetingTitle: meeting.title,
     meetingData: meeting,
   };
+}
+
+// Function to save participants to Supabase
+async function saveParticipantsToSupabase(
+  meetingId: string,
+  participants: any[],
+) {
+  try {
+    const { supabase } = await import("./supabase");
+
+    // Process each participant
+    for (const participant of participants) {
+      // Check if participant already exists
+      const { data: existingParticipant } = await supabase
+        .from("participants")
+        .select("id")
+        .eq("meeting_id", meetingId)
+        .eq("participant_id", participant.id)
+        .single();
+
+      if (existingParticipant) {
+        // Update existing participant
+        await supabase
+          .from("participants")
+          .update({
+            is_muted: participant.isMuted,
+            is_camera_on: participant.isCameraOn,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", existingParticipant.id);
+      } else {
+        // Insert new participant
+        await supabase.from("participants").insert({
+          meeting_id: meetingId,
+          participant_id: participant.id,
+          name: participant.name,
+          email: participant.email,
+          is_host: participant.isHost,
+          is_muted: participant.isMuted,
+          has_camera: participant.hasCamera,
+          is_camera_on: participant.isCameraOn,
+          join_time: participant.joinTime || new Date().toISOString(),
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error saving participants to Supabase:", error);
+  }
 }
 
 // Hook to monitor Google Meet status
